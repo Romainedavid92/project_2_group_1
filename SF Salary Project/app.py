@@ -1,12 +1,9 @@
-import os
-
 import pandas as pd
 import numpy as np
 
 from sqlalchemy import create_engine
-
 from flask import Flask, jsonify, render_template
-from flask_sqlalchemy import SQLAlchemy
+import gender_guesser.detector as gender
 
 app = Flask(__name__)
 
@@ -19,20 +16,36 @@ app = Flask(__name__)
 # db = SQLAlchemy(app)
 
 engine = create_engine("sqlite:///db/database.sqlite")
+d = gender.Detector(case_sensitive=False)
 
 @app.route("/")
 def index():
     """Return the homepage."""
     return render_template("index.html")
 
-@app.route("/salaries/")
-def salaries():
+@app.route("/genderSalaryPage")
+def genderSalaryPage():
+    """Return the homepage."""
+    return render_template("genderSalary.html")
+
+@app.route("/jobTitlePage")
+def jobTitlePage():
+    """Return the homepage."""
+    return render_template("jobTitle.html")
+
+@app.route("/baseOvertimePage")
+def baseOvertimePage():
+    """Return the homepage."""
+    return render_template("baseOvertime.html")
+
+@app.route("/salaries/<year>")
+def salaries(year):
     conn = engine.connect()
 
-    query = """SELECT *
+    query = f"""SELECT *
             FROM Salaries
             WHERE TotalPay > 2000
-            LIMIT 200"""
+            AND Year = {year}"""
 
     df = pd.read_sql(query, conn) #execute query
 
@@ -43,43 +56,84 @@ def salaries():
     conn.close()
     return df.to_json(orient="index")
 
-# @app.route("/teams/<year>")
-# def teams(year):
-#     conn = engine.connect()
 
-#     query = f"""SELECT 
-#                     *
-#                 FROM Teams
-#                 WHERE yearID = {year}
-#             """
+@app.route("/jobTitles/<year>/<topBottom>")
+def jobTitles(year, topBottom):
+    conn = engine.connect()
 
-#     df = pd.read_sql(query, conn) #execute query
+    asc = "DESC"
 
-#     #debug log to console
-#     print(df.head())
+    if topBottom == "Bottom":
+        asc = "ASC"
 
-#     #close db connection
-#     conn.close()
-#     return df.to_json(orient="index")
+    query = f"""
+            SELECT 
+                JobTitle, 
+                round(avg(TotalPay)) as "Mean_Salary"                        
+            FROM
+                Salaries
+            WHERE 
+                TotalPay > 2000
+                AND Year = {year}
+            GROUP BY 
+                JobTitle
+            ORDER BY
+                avg(TotalPay) {asc}
+            """
 
-# @app.route("/people")
-# def people():
-#     conn = engine.connect()
+    df = pd.read_sql(query, conn) #execute query
+    df["JobTitle"] = df.JobTitle.map(lambda x: trimJobTitle(x));
 
-#     query = """SELECT 
-#                     *
-#                 FROM Master
-#                 LIMIT 100
-#             """
+    #debug log to console
+    print(df.head())
 
-#     df = pd.read_sql(query, conn) #execute query
+    #close db connection
+    conn.close()
+    return df.to_json(orient="index")
 
-#     #debug log to console
-#     print(df.head())
+def trimJobTitle(word):
+    tooLong = 35
+    newWord = word.title();
+    if len(newWord) > tooLong:
+        newWord = newWord[0:tooLong] + "...  "
+    else:
+        newWord = newWord + "  "
+    return newWord
 
-#     #close db connection
-#     conn.close()
-#     return df.to_json(orient="index")
+@app.route("/genders/<year>")
+def genders(year):
+    conn = engine.connect()
+
+    query = f"""SELECT *
+        FROM Salaries
+        WHERE TotalPay > 2000
+        AND Year = {year}"""
+
+    df = pd.read_sql(query, conn) #execute query
+    genders = df.EmployeeName.map(lambda x: d.get_gender(x.split(" ")[0]))
+
+    df["Gender"] = genders
+    df["Gender"] = df["Gender"].replace("mostly_male", "male")
+    df["Gender"] = df["Gender"].replace(["mostly_female","unknown", "andy"], "female")
+
+    maleAvg = df.loc[df.Gender == "male", "TotalPay"].mean()
+    maleMed = df.loc[df.Gender == "male", "TotalPay"].median()
+    maleMax = df.loc[df.Gender == "male", "TotalPay"].max()
+
+    femaleAvg = df.loc[df.Gender == "female", "TotalPay"].mean()
+    femaleMed = df.loc[df.Gender == "female", "TotalPay"].median()
+    femaleMax = df.loc[df.Gender == "female", "TotalPay"].max()
+
+    df2 = pd.DataFrame()
+    df2["Gender"] = ["Male", "Female"]
+    df2["AveragePay"] = [maleAvg, femaleAvg]
+    df2["MedianPay"] = [maleMed, femaleMed]
+    df2["MaxPay"] = [maleMax, femaleMax]
+    df2["Year"] = [year, year]
+
+    #close db connection
+    conn.close()
+    return df2.to_json(orient="index")
 
 if __name__ == "__main__":
     app.run(debug=True)
